@@ -15,6 +15,13 @@ export default async function handler(req, res) {
     const text = message.text;
     if (!text) return res.status(200).send('OK');
 
+    // Abortar si no es un comando y no contiene números
+    const tieneNumero = /\d/.test(text);
+    const esComando = text.startsWith('/');
+    if (!tieneNumero && !esComando) {
+        return res.status(200).send('OK');
+    }
+
     // 1. Inicializar auth y doc (necesario para comandos y para IA)
     const serviceAccountAuth = new JWT({
         email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
