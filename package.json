@@ -1,0 +1,10 @@
+{
+  "name": "bot-finanzas-telegram",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@google/generative-ai": "^0.1.0",
+    "google-auth-library": "^9.0.0",
+    "google-spreadsheet": "^4.1.1"
+  }
+}
