@@ -29,37 +29,46 @@ export default async function handler(req, res) {
 
     // 2. Manejo de comandos (ej. /resumen)
     if (text.startsWith('/resumen')) {
-        const hoy = new Date().toLocaleDateString('es-MX');
-        const esteMes = new Date().getMonth();
-        const esteAnio = new Date().getFullYear();
+        const ahora = new Date();
+        const hoyStr = ahora.toLocaleDateString('es-MX');
+        const hoyDia = ahora.getDate();
+        const esteMes = ahora.getMonth();
+        const esteAnio = ahora.getFullYear();
 
-        const gastosHoy = rows.filter(r => r.get('Fecha') === hoy);
+        // Lógica de quincena: 1-15 o 16-fin de mes
+        const esSegundaQuincena = hoyDia > 15;
+        const inicioQuincena = esSegundaQuincena ? 16 : 1;
+        const finQuincena = esSegundaQuincena ? 31 : 15;
+
+        const gastosHoy = rows.filter(r => r.get('Fecha') === hoyStr);
         const totalHoy = gastosHoy.reduce((acc, r) => acc + Number(r.get('Monto') || 0), 0);
 
-        const gastosMes = rows.filter(r => {
-            const [d, m, y] = r.get('Fecha').split('/');
+        const gastosQuincena = rows.filter(r => {
+            const [d, m, y] = r.get('Fecha').split('/').map(Number);
             const fechaGasto = new Date(y, m - 1, d);
-            return fechaGasto.getMonth() === esteMes && fechaGasto.getFullYear() === esteAnio;
+            return fechaGasto.getMonth() === esteMes && 
+                   fechaGasto.getFullYear() === esteAnio && 
+                   d >= inicioQuincena && d <= finQuincena;
         });
 
-        const totalMesSalidas = gastosMes
+        const totalQuincenaSalidas = gastosQuincena
             .filter(r => r.get('Bolsa') === 'salidas')
             .reduce((acc, r) => acc + Number(r.get('Monto') || 0), 0);
         
-        const totalMesFija = gastosMes
+        const totalQuincenaFija = gastosQuincena
             .filter(r => r.get('Bolsa') === 'fija')
             .reduce((acc, r) => acc + Number(r.get('Monto') || 0), 0);
 
         const ultimoGasto = rows.length > 0 ? rows[rows.length - 1] : null;
         const presupuestoQuincena = 1500;
-        const restanteQuincena = presupuestoQuincena - totalMesSalidas;
+        const restanteQuincena = presupuestoQuincena - totalQuincenaSalidas;
 
-        let reply = `📊 *RESUMEN GENERAL*\n\n`;
-        reply += `📅 *Hoy (${hoy}):* $${totalHoy}\n`;
-        reply += `🗓️ *Mes total:* $${totalMesSalidas + totalMesFija}\n`;
-        reply += `   • Salidas: $${totalMesSalidas}\n`;
-        reply += `   • Fija/Servicios: $${totalMesFija}\n\n`;
-        reply += `🏁 *Presupuesto salidas:* $${totalMesSalidas} / $${presupuestoQuincena}\n`;
+        let reply = `📊 *RESUMEN QUINCENAL (${inicioQuincena}-${finQuincena})*\n\n`;
+        reply += `📅 *Hoy:* $${totalHoy}\n`;
+        reply += `🗓️ *Total quincena:* $${totalQuincenaSalidas + totalQuincenaFija}\n`;
+        reply += `   • Salidas: $${totalQuincenaSalidas}\n`;
+        reply += `   • Fija/Servicios: $${totalQuincenaFija}\n\n`;
+        reply += `🏁 *Presupuesto salidas:* $${totalQuincenaSalidas} / $${presupuestoQuincena}\n`;
         reply += `💰 *Restante:* $${restanteQuincena > 0 ? restanteQuincena : 0}\n\n`;
         
         if (ultimoGasto) {
@@ -111,15 +120,24 @@ export default async function handler(req, res) {
             Bolsa: data.bolsa
         });
 
-        // Calculamos sobre los datos actualizados (rows viejas + nuevo monto si es 'salidas')
-        const totalSalidas = rows
-            .filter(r => r.get('Bolsa') === 'salidas')
-            .reduce((acc, r) => acc + Number(r.get('Monto') || 0), 0) + (data.bolsa === 'salidas' ? Number(data.monto) : 0);
+        // Calculamos sobre los datos de la quincena actual para el mensaje de confirmación
+        const ahora = new Date();
+        const hoyDia = ahora.getDate();
+        const esteMes = ahora.getMonth();
+        const esteAnio = ahora.getFullYear();
+        const esSegundaQuincena = hoyDia > 15;
+        const inicioQ = esSegundaQuincena ? 16 : 1;
+        const finQ = esSegundaQuincena ? 31 : 15;
 
-        const restante = 1500 - totalSalidas;
+        const totalSalidasQuincena = rows.filter(r => {
+            const [d, m, y] = r.get('Fecha').split('/').map(Number);
+            return m - 1 === esteMes && y === esteAnio && d >= inicioQ && d <= finQ && r.get('Bolsa') === 'salidas';
+        }).reduce((acc, r) => acc + Number(r.get('Monto') || 0), 0) + (data.bolsa === 'salidas' ? Number(data.monto) : 0);
+
+        const restante = 1500 - totalSalidasQuincena;
         
         const telegramUrl = `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`;
-        const reply = `✅ *Anotado:* $${data.monto} - ${data.concepto}\n\n📊 *Salidas quincena:* $${totalSalidas} / $1,500\n💰 *Restante:* $${restante > 0 ? restante : 0}`;
+        const reply = `✅ *Anotado:* $${data.monto} - ${data.concepto}\n\n📊 *Salidas quincena:* $${totalSalidasQuincena} / $1,500\n💰 *Restante:* $${restante > 0 ? restante : 0}`;
 
         await fetch(telegramUrl, {
             method: 'POST',
