@@ -4,7 +4,7 @@
   "type": "module",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "google-auth-library": "^9.0.0",
-    "google-spreadsheet": "^4.1.1"
+    "google-auth-library": "^10.6.2",
+    "google-spreadsheet": "^5.2.0"
   }
 }

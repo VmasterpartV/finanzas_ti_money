@@ -16,20 +16,21 @@ export default async function handler(req, res) {
     if (!text) return res.status(200).send('OK');
 
     try {
-        // --- AJUSTE 1: Nombre del modelo ---
-        // Usamos el string exacto que espera la API v1
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         
-        const systemPrompt = `Eres un extractor de gastos. Recibe un texto y devuelve SIEMPRE un JSON con este formato:
+        const systemPrompt = `Eres un extractor de gastos. Devuelve ÚNICAMENTE un JSON:
         {"monto": number, "concepto": "string", "bolsa": "salidas" | "fija"}.
-        Si el texto tiene "#fijo" o menciona renta, luz, agua, internet, la bolsa es "fija". De lo contrario es "salidas".`;
+        Si tiene "#fijo" o es servicio básico, la bolsa es "fija".`;
         
-        // --- AJUSTE 2: Estructura del contenido ---
-        // Pasamos el system prompt y el texto de forma más explícita
-        const result = await model.generateContent(`${systemPrompt}\n\nTexto a procesar: ${text}`);
-        const response = await result.response;
-        const responseText = response.text().replace(/```json|```/g, "").trim();
-        
+        // Usamos la estructura de contenido más robusta
+        const result = await model.generateContent({
+            contents: [{ 
+                role: 'user', 
+                parts: [{ text: `${systemPrompt}\n\nTexto: ${text}` }] 
+            }]
+        });
+
+        const responseText = result.response.text().replace(/```json|```/g, "").trim();
         const data = JSON.parse(responseText);
 
         if (!data.monto) throw new Error("No se detectó monto");
