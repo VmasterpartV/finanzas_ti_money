@@ -15,6 +15,70 @@ export default async function handler(req, res) {
     const text = message.text;
     if (!text) return res.status(200).send('OK');
 
+    // 1. Inicializar auth y doc (necesario para comandos y para IA)
+    const serviceAccountAuth = new JWT({
+        email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+        key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+
+    const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+
+    // 2. Manejo de comandos (ej. /resumen)
+    if (text.startsWith('/resumen')) {
+        const hoy = new Date().toLocaleDateString('es-MX');
+        const esteMes = new Date().getMonth();
+        const esteAnio = new Date().getFullYear();
+
+        const gastosHoy = rows.filter(r => r.get('Fecha') === hoy);
+        const totalHoy = gastosHoy.reduce((acc, r) => acc + Number(r.get('Monto') || 0), 0);
+
+        const gastosMes = rows.filter(r => {
+            const [d, m, y] = r.get('Fecha').split('/');
+            const fechaGasto = new Date(y, m - 1, d);
+            return fechaGasto.getMonth() === esteMes && fechaGasto.getFullYear() === esteAnio;
+        });
+
+        const totalMesSalidas = gastosMes
+            .filter(r => r.get('Bolsa') === 'salidas')
+            .reduce((acc, r) => acc + Number(r.get('Monto') || 0), 0);
+        
+        const totalMesFija = gastosMes
+            .filter(r => r.get('Bolsa') === 'fija')
+            .reduce((acc, r) => acc + Number(r.get('Monto') || 0), 0);
+
+        const ultimoGasto = rows.length > 0 ? rows[rows.length - 1] : null;
+        const presupuestoQuincena = 1500;
+        const restanteQuincena = presupuestoQuincena - totalMesSalidas;
+
+        let reply = `📊 *RESUMEN GENERAL*\n\n`;
+        reply += `📅 *Hoy (${hoy}):* $${totalHoy}\n`;
+        reply += `🗓️ *Mes total:* $${totalMesSalidas + totalMesFija}\n`;
+        reply += `   • Salidas: $${totalMesSalidas}\n`;
+        reply += `   • Fija/Servicios: $${totalMesFija}\n\n`;
+        reply += `🏁 *Presupuesto salidas:* $${totalMesSalidas} / $${presupuestoQuincena}\n`;
+        reply += `💰 *Restante:* $${restanteQuincena > 0 ? restanteQuincena : 0}\n\n`;
+        
+        if (ultimoGasto) {
+            reply += `🕒 *Último gasto:* $${ultimoGasto.get('Monto')} - ${ultimoGasto.get('Concepto')} (${ultimoGasto.get('Fecha')})`;
+        }
+
+        const telegramUrl = `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`;
+        await fetch(telegramUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                chat_id: message.chat.id, 
+                text: reply,
+                parse_mode: 'Markdown'
+            })
+        });
+        return res.status(200).json({ ok: true });
+    }
+
     try {
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         
@@ -33,19 +97,12 @@ export default async function handler(req, res) {
         const responseText = result.response.text().replace(/```json|```/g, "").trim();
         const data = JSON.parse(responseText);
 
-        if (!data.monto) throw new Error("No se detectó monto");
+        if (!data.monto || isNaN(data.monto)) {
+            console.log("No se detectó monto, ignorando mensaje.");
+            return res.status(200).send('OK');
+        }
 
-        // 3. Google Sheets (Igual que antes)
-        const serviceAccountAuth = new JWT({
-            email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-            key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-        });
-
-        const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, serviceAccountAuth);
-        await doc.loadInfo();
-        const sheet = doc.sheetsByIndex[0];
-
+        // 3. Guardar en Google Sheets (Ya tenemos 'sheet' y 'rows' cargados arriba)
         await sheet.addRow({
             Fecha: new Date().toLocaleDateString('es-MX'),
             Usuario: message.from.first_name || 'Desconocido',
@@ -54,10 +111,10 @@ export default async function handler(req, res) {
             Bolsa: data.bolsa
         });
 
-        const rows = await sheet.getRows();
+        // Calculamos sobre los datos actualizados (rows viejas + nuevo monto si es 'salidas')
         const totalSalidas = rows
             .filter(r => r.get('Bolsa') === 'salidas')
-            .reduce((acc, r) => acc + Number(r.get('Monto') || 0), 0);
+            .reduce((acc, r) => acc + Number(r.get('Monto') || 0), 0) + (data.bolsa === 'salidas' ? Number(data.monto) : 0);
 
         const restante = 1500 - totalSalidas;
         
